@@ -9,6 +9,7 @@ on:
       - master
 env:
   APP_NAME: "simple-go-project"
+  DOCKER_IMAGE: allfaysal/simple-go-project:${{ github.sha }}
 
 jobs:
   test:
@@ -37,6 +38,7 @@ jobs:
         run: go test -v -race ./...
 
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -70,42 +72,33 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t allfaysal/simple-go-project:${{ github.sha }} .
+          docker build -t $DOCKER_IMAGE .
 
       - name: Push Docker image to Docker Hub
         run: |
-          docker push allfaysal/simple-go-project:${{ github.sha }}
+          docker push $DOCKER_IMAGE
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download Docker image
-        uses: actions/download-artifact@v3
-        with:
-          name: docker-image
-
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/simple-go-project.pem
-          chmod 600 ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/simple-go-project.pem
           echo "${{ secrets.EC2_HOST }} $(ssh-keyscan -t ed25519 ${{ secrets.EC2_HOST }} | cut -d' ' -f2-)" >> ~/.ssh/known_hosts
 
       - name: Deploy to EC2
         run: |
-          ssh -i ~/.ssh/simple-go-project.pem -o StrictHostKeyChecking=yes ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-          docker pull allfaysal/simple-go-project:${{ github.sha }} || true
-          
+          echo "Deploying $APP_NAME"
+          ssh -i ~/.ssh/simple-go-project.pem -o StrictHostKeyChecking=yes ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+          "docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker pull $DOCKER_IMAGE || true
           docker stop $APP_NAME || true
           docker rm $APP_NAME || true
-          
           docker run -d \
-            --name $APP_NAME \
-            --restart unless-stopped \
-            -p 8112:8100 \
-            allfaysal/simple-go-project:${{ github.sha }}
-          EOF          
+          --name $APP_NAME \
+          --restart unless-stopped \
+          -p 8112:8100 \
+          $DOCKER_IMAGE"        
